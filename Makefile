@@ -7,7 +7,7 @@ LUCI_DEPENDS:=+dnsmasq-full +kmod-nft-core +nftables +cron +luci-base
 PKG_NAME:=luci-app-heartguard
 PKG_VERSION:=1.0.0
 PKG_RELEASE:=1
-PKG_LICENSE:=MIT
+PKG_LICENSE:=GPL-2.0-only
 
 LUCI_PKGARCH:=all
 
