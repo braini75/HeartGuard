@@ -1,0 +1,71 @@
+#!/bin/sh
+# HeartGuard Schedule Enforcer
+# Called by cron: heartguard-schedule [allow|block] [profile_id]
+# /usr/sbin/heartguard-schedule
+
+ACTION="$1"   # allow | block
+PROFILE="$2"  # e.g. lukas, emma
+
+[ -z "$ACTION" ] || [ -z "$PROFILE" ] && {
+	echo "Usage: heartguard-schedule [allow|block] [profile_id]"
+	exit 1
+}
+
+log() { logger -t heartguard-schedule "$@"; }
+
+. /lib/functions.sh
+config_load heartguard
+
+# Get all MACs for this profile
+MACS=""
+collect_macs() {
+	local cfg="$1"
+	local mac profile enabled
+	config_get mac     "$cfg" mac
+	config_get profile "$cfg" profile
+	config_get enabled "$cfg" enabled 1
+	[ "$profile" = "$PROFILE" ] && [ "$enabled" = "1" ] && [ -n "$mac" ] && {
+		MACS="$MACS $mac"
+	}
+}
+config_foreach collect_macs device
+
+if [ "$ACTION" = "block" ]; then
+	log "Blocking profile '$PROFILE' (schedule end)"
+	for mac in $MACS; do
+		mac_lower=$(echo "$mac" | tr '[:upper:]' '[:lower:]')
+		# Move from profile set → blocked set
+		nft delete element inet heartguard "profile_$PROFILE" "{ $mac_lower }" 2>/dev/null
+		nft add element inet heartguard blocked_devices "{ $mac_lower }" 2>/dev/null
+		# Drop existing connections for this MAC
+		conntrack -D --orig-src-mac "$mac_lower" 2>/dev/null
+		log "  Blocked: $mac ($mac_lower)"
+	done
+
+	# Also block DNS responses (redirect to captive portal)
+	DNSMASQ_SCHED=/etc/dnsmasq.d/heartguard_sched_${PROFILE}.conf
+	echo "# Schedule block: $PROFILE" > "$DNSMASQ_SCHED"
+	for mac in $MACS; do
+		mac_lower=$(echo "$mac" | tr '[:upper:]' '[:lower:]')
+		echo "dhcp-mac=hg_sched_block,$mac_lower" >> "$DNSMASQ_SCHED"
+	done
+	echo "address=/#/0.0.0.0,tag:hg_sched_block" >> "$DNSMASQ_SCHED"
+	/etc/init.d/dnsmasq reload
+
+elif [ "$ACTION" = "allow" ]; then
+	log "Allowing profile '$PROFILE' (schedule start)"
+	# Remove schedule block
+	rm -f "/etc/dnsmasq.d/heartguard_sched_${PROFILE}.conf"
+	/etc/init.d/dnsmasq reload
+
+	for mac in $MACS; do
+		mac_lower=$(echo "$mac" | tr '[:upper:]' '[:lower:]')
+		# Move from blocked → profile set
+		nft delete element inet heartguard blocked_devices "{ $mac_lower }" 2>/dev/null
+		nft add element inet heartguard "profile_$PROFILE" "{ $mac_lower }" 2>/dev/null
+		log "  Allowed: $mac"
+	done
+fi
+
+# Send notification to LuCI websocket (if available)
+ubus send heartguard.schedule_change "{\"profile\":\"$PROFILE\",\"action\":\"$ACTION\"}" 2>/dev/null

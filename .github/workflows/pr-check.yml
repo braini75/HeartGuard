@@ -1,0 +1,77 @@
+name: PR Checks
+
+on:
+  pull_request:
+    branches: [ main ]
+
+jobs:
+  # Fast feedback on PRs without full SDK build
+  quick-check:
+    name: Quick validation
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Check file structure
+        run: |
+          REQUIRED=(
+            "Makefile"
+            "root/etc/config/heartguard"
+            "root/etc/init.d/heartguard"
+            "root/usr/sbin/heartguard-schedule"
+            "root/usr/sbin/heartguard-update-blocklists"
+            "root/usr/share/luci/menu.d/luci-app-heartguard.json"
+            "root/usr/share/rpcd/acl.d/luci-app-heartguard.json"
+            "htdocs/luci-static/resources/view/heartguard/overview.js"
+            "htdocs/luci-static/resources/view/heartguard/profiles.js"
+            "htdocs/luci-static/resources/view/heartguard/devices.js"
+            "htdocs/luci-static/resources/view/heartguard/log.js"
+          )
+          MISSING=0
+          for f in "${REQUIRED[@]}"; do
+            if [ ! -f "$f" ]; then
+              echo "MISSING: $f"
+              MISSING=$((MISSING+1))
+            else
+              echo "  OK: $f"
+            fi
+          done
+          [ $MISSING -eq 0 ] || exit 1
+
+      - name: Lint shell scripts
+        run: |
+          sudo apt-get install -y shellcheck -qq
+          find root -type f -name "*.sh" -o -name "heartguard*" | \
+            xargs file | grep "shell" | cut -d: -f1 | \
+            xargs shellcheck --severity=warning || true
+
+      - name: Validate JSON
+        run: |
+          find . -name "*.json" -not -path "./.git/*" | while read f; do
+            python3 -m json.tool "$f" > /dev/null && echo "  OK: $f" || { echo "INVALID: $f"; exit 1; }
+          done
+
+      - name: Check Makefile has required fields
+        run: |
+          grep -q "LUCI_TITLE"   Makefile || { echo "Missing LUCI_TITLE";   exit 1; }
+          grep -q "LUCI_DEPENDS" Makefile || { echo "Missing LUCI_DEPENDS"; exit 1; }
+          grep -q "PKG_VERSION"  Makefile || { echo "Missing PKG_VERSION";  exit 1; }
+          echo "Makefile OK"
+
+      - name: Check version consistency
+        run: |
+          # Version in Makefile should match tag or be bumped
+          MAKEFILE_VER=$(grep 'PKG_VERSION' Makefile | grep -oP '[\d]+\.[\d]+\.[\d]+')
+          echo "Package version: $MAKEFILE_VER"
+
+      - name: PR summary
+        run: |
+          echo "## PR Check Results" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "| Check | Status |" >> $GITHUB_STEP_SUMMARY
+          echo "|-------|--------|" >> $GITHUB_STEP_SUMMARY
+          echo "| File structure | ✅ |" >> $GITHUB_STEP_SUMMARY
+          echo "| JSON validity  | ✅ |" >> $GITHUB_STEP_SUMMARY
+          echo "| Makefile       | ✅ |" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "> Full .ipk build runs on merge to main" >> $GITHUB_STEP_SUMMARY

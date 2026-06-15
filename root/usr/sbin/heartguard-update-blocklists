@@ -1,0 +1,112 @@
+#!/bin/sh
+# HeartGuard Blocklist Updater
+# Downloads and maintains domain blocklists per category
+# Run via cron: 0 3 * * * /usr/sbin/heartguard-update-blocklists
+# /usr/sbin/heartguard-update-blocklists
+
+BLOCKLIST_DIR=/etc/heartguard/blocklists
+TMP_DIR=/tmp/heartguard_update
+LOG_TAG=heartguard-blocklists
+
+log() { logger -t "$LOG_TAG" "$@"; echo "[$(date '+%H:%M:%S')] $@"; }
+
+mkdir -p "$BLOCKLIST_DIR" "$TMP_DIR"
+
+# ─── BLOCKLIST SOURCES ──────────────────────────────────────
+# Format: category|url
+SOURCES="
+adult|https://raw.githubusercontent.com/nicehash/lists/master/adult.txt
+gambling|https://raw.githubusercontent.com/nicehash/lists/master/gambling.txt
+social_media|https://raw.githubusercontent.com/StevenBlack/hosts/master/extensions/social/hosts
+gaming|https://raw.githubusercontent.com/nicehash/lists/master/gaming.txt
+ads|https://raw.githubusercontent.com/StevenBlack/hosts/master/hosts
+"
+
+# ─── DOWNLOAD & PROCESS ─────────────────────────────────────
+log "Starting blocklist update..."
+
+echo "$SOURCES" | while IFS='|' read -r category url; do
+	[ -z "$category" ] && continue
+	log "Updating $category blocklist..."
+
+	local tmpfile="$TMP_DIR/$category.raw"
+	local outfile="$BLOCKLIST_DIR/$category.conf"
+
+	# Download with timeout
+	if wget -q --timeout=30 -O "$tmpfile" "$url" 2>/dev/null; then
+		# Parse: extract domains from hosts-format or plain list
+		grep -v '^#' "$tmpfile" | \
+		grep -v '^$' | \
+		sed 's/^0\.0\.0\.0 //' | \
+		sed 's/^127\.0\.0\.1 //' | \
+		grep -v '^localhost' | \
+		grep -v ' ' | \
+		grep '\.' | \
+		sort -u > "$outfile"
+
+		local count=$(wc -l < "$outfile")
+		log "$category: $count domains loaded"
+	else
+		log "WARNING: Failed to download $category list, keeping old version"
+	fi
+done
+
+# ─── BUILT-IN MINIMAL LISTS (fallback if no internet) ───────
+# Adult
+cat > "$BLOCKLIST_DIR/adult.conf" <<-'ADULT'
+# HeartGuard built-in adult blocklist (minimal)
+pornhub.com
+xvideos.com
+xhamster.com
+redtube.com
+youporn.com
+onlyfans.com
+chaturbate.com
+livejasmin.com
+stripchat.com
+cam4.com
+ADULT
+
+# Gambling
+cat > "$BLOCKLIST_DIR/gambling.conf" <<-'GAMBL'
+# HeartGuard built-in gambling blocklist (minimal)
+bet365.com
+pokerstars.com
+888casino.com
+betway.com
+williamhill.com
+ladbrokes.com
+paddy-power.com
+unibet.com
+GAMBL
+
+# Social Media
+cat > "$BLOCKLIST_DIR/social_media.conf" <<-'SOCIAL'
+# HeartGuard built-in social media blocklist
+tiktok.com
+tiktokv.com
+musical.ly
+snapchat.com
+snapchat.net
+reddit.com
+redd.it
+9gag.com
+SOCIAL
+
+# Gaming
+cat > "$BLOCKLIST_DIR/gaming.conf" <<-'GAMING'
+# HeartGuard built-in gaming blocklist
+fortnite.com
+epicgames.com
+roblox.com
+minecraft.net
+steampowered.com
+store.steampowered.com
+twitch.tv
+xbox.com
+playstation.com
+GAMING
+
+log "Blocklists updated. Reloading HeartGuard..."
+/etc/init.d/heartguard reload
+log "Done."

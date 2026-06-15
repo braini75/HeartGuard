@@ -1,0 +1,76 @@
+name: Update OpenWrt SDK version
+
+on:
+  schedule:
+    # Check for new OpenWrt releases every Monday at 06:00
+    - cron: '0 6 * * 1'
+  workflow_dispatch:
+
+jobs:
+  check-version:
+    name: Check latest OpenWrt release
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: write
+      pull-requests: write
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Fetch latest stable release tag
+        id: latest
+        run: |
+          LATEST=$(curl -sL https://api.github.com/repos/openwrt/openwrt/releases \
+            | python3 -c "
+          import json, sys
+          releases = json.load(sys.stdin)
+          # Filter: stable releases only (no -rc, no snapshots)
+          stable = [r['tag_name'].lstrip('v') for r in releases
+                    if not r['prerelease'] and '-rc' not in r['tag_name']]
+          print(stable[0] if stable else '')
+          ")
+          echo "LATEST=$LATEST" >> $GITHUB_OUTPUT
+          echo "Latest stable OpenWrt: $LATEST"
+
+      - name: Read current version from workflow
+        id: current
+        run: |
+          CURRENT=$(grep 'OPENWRT_VERSION:' .github/workflows/build.yml | \
+                    sed 's/.*OPENWRT_VERSION: *"\?\([^"]*\)"\?.*/\1/' | head -1)
+          echo "CURRENT=$CURRENT" >> $GITHUB_OUTPUT
+          echo "Current in workflow: $CURRENT"
+
+      - name: Open PR if version differs
+        if: steps.latest.outputs.LATEST != steps.current.outputs.CURRENT && steps.latest.outputs.LATEST != ''
+        run: |
+          git config user.name  "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+
+          BRANCH="chore/bump-openwrt-${{ steps.latest.outputs.LATEST }}"
+          git checkout -b "$BRANCH"
+
+          # Update the version string in build.yml
+          sed -i "s/OPENWRT_VERSION: \"${{ steps.current.outputs.CURRENT }}\"/OPENWRT_VERSION: \"${{ steps.latest.outputs.LATEST }}\"/" \
+            .github/workflows/build.yml
+
+          git add .github/workflows/build.yml
+          git commit -m "chore: bump OpenWrt SDK ${{ steps.current.outputs.CURRENT }} → ${{ steps.latest.outputs.LATEST }}"
+          git push origin "$BRANCH"
+
+          gh pr create \
+            --title "chore: bump OpenWrt SDK to ${{ steps.latest.outputs.LATEST }}" \
+            --body "OpenWrt released **${{ steps.latest.outputs.LATEST }}**. This PR updates the SDK version used for building .ipk packages.
+
+          ### What changes
+          - \`OPENWRT_VERSION\`: \`${{ steps.current.outputs.CURRENT }}\` → \`${{ steps.latest.outputs.LATEST }}\`
+
+          The CI will test the build with the new SDK automatically." \
+            --base main \
+            --head "$BRANCH" \
+            --label "dependencies"
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Log (no update needed)
+        if: steps.latest.outputs.LATEST == steps.current.outputs.CURRENT
+        run: echo "Already on latest OpenWrt ${{ steps.current.outputs.CURRENT }} ✓"

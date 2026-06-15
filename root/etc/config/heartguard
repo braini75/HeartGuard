@@ -1,0 +1,75 @@
+# HeartGuard Configuration
+# /etc/config/heartguard
+
+config heartguard 'global'
+	option enabled '1'
+	option version '1.0.0'
+	option block_unknown_devices '1'
+	option log_queries '1'
+	option timezone 'Europe/Berlin'
+
+# ─── PROFILES ───────────────────────────────────────────────
+config profile 'lukas'
+	option name 'Lukas'
+	option age '12'
+	option avatar 'child'
+	option enabled '1'
+	option color '#3b82f6'
+	# Weekday schedule
+	option weekday_start '15:00'
+	option weekday_end '20:00'
+	# Weekend schedule
+	option weekend_start '09:00'
+	option weekend_end '21:00'
+	# Blocked categories (comma-separated)
+	option blocked_categories 'adult,gambling,social_media'
+	# Extra blocked domains (space-separated)
+	list blocked_domains 'youtube.com'
+	list blocked_domains 'tiktok.com'
+	list blocked_domains 'instagram.com'
+	# Always-allowed domains (override category blocks)
+	list allowed_domains 'wikipedia.org'
+	list allowed_domains 'khanacademy.org'
+	list allowed_domains 'school.de'
+
+config profile 'emma'
+	option name 'Emma'
+	option age '16'
+	option avatar 'teen'
+	option enabled '1'
+	option color '#e84d8a'
+	option weekday_start '13:00'
+	option weekday_end '22:00'
+	option weekend_start '08:00'
+	option weekend_end '23:00'
+	option blocked_categories 'adult,gambling'
+	list blocked_domains 'onlyfans.com'
+
+# ─── DEVICES ────────────────────────────────────────────────
+config device
+	option name "Lukas Handy"
+	option mac 'A1:B2:C3:D4:E5:F6'
+	option profile 'lukas'
+	option type 'android'
+	option enabled '1'
+
+config device
+	option name "Schul Laptop"
+	option mac 'B2:C3:D4:E5:F6:A1'
+	option profile 'lukas'
+	option type 'linux'
+	option enabled '1'
+
+config device
+	option name "Emma PC"
+	option mac 'D4:E5:F6:A1:B2:C3'
+	option profile 'emma'
+	option type 'windows'
+	option enabled '1'
+
+config device
+	option name "Emma Handy"
+	option mac 'C3:D4:E5:F6:A1:B2'
+	option profile 'emma'
+	option type 'android'
+	option enabled '1'

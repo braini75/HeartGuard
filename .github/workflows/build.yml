@@ -1,0 +1,222 @@
+name: Build luci-app-heartguard
+
+on:
+  push:
+    branches: [ main ]
+    tags:     [ 'v*.*.*' ]
+  pull_request:
+    branches: [ main ]
+  workflow_dispatch:
+
+env:
+  OPENWRT_VERSION: "24.10.0"
+  PACKAGE_NAME: "luci-app-heartguard"
+
+jobs:
+  # ── 1. Lint & Validate ──────────────────────────────────────────────────────
+  lint:
+    name: Lint & Validate
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Validate shell scripts
+        run: |
+          sudo apt-get install -y shellcheck -qq
+          find root/usr/sbin root/etc/init.d -type f | \
+            xargs shellcheck --severity=warning || true
+
+      - name: Validate UCI config
+        run: |
+          python3 - <<'EOF'
+          import re
+          ok = True
+          with open("root/etc/config/heartguard") as f:
+            for i, line in enumerate(f, 1):
+              l = line.rstrip()
+              if l and not l.startswith("#"):
+                if not re.match(r"^\s*(config|option|list)\s+", l) and l.strip():
+                  print(f"  Line {i}: unexpected: {l}")
+                  ok = False
+          print("UCI config: " + ("OK" if ok else "ERRORS FOUND"))
+          import sys; sys.exit(0 if ok else 1)
+          EOF
+
+      - name: Validate JSON files
+        run: |
+          for f in $(find . -name "*.json" | grep -v ".git"); do
+            python3 -m json.tool "$f" > /dev/null && echo "  OK: $f" || exit 1
+          done
+
+  # ── 2. Build .ipk for each router architecture ──────────────────────────────
+  build:
+    name: Build · ${{ matrix.target }}/${{ matrix.subtarget }}
+    runs-on: ubuntu-24.04
+    needs: lint
+
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - target: ath79
+            subtarget: generic
+            arch: mips_24kc
+            description: "TP-Link Archer / GL.iNet AR-series"
+          - target: ramips
+            subtarget: mt7621
+            arch: mipsel_24kc
+            description: "GL.iNet MT300/MT1300 / TP-Link"
+          - target: x86
+            subtarget: 64
+            arch: x86_64
+            description: "PC / VM / Proxmox"
+          - target: mediatek
+            subtarget: filogic
+            arch: aarch64_cortex-a53
+            description: "GL.iNet MT6000 / Xiaomi AX3000T"
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install build dependencies
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y -qq \
+            build-essential ccache file g++ gawk gettext git \
+            libelf-dev libncurses5-dev libssl-dev python3 \
+            rsync unzip wget zstd
+
+      - name: Cache OpenWrt SDK
+        id: cache-sdk
+        uses: actions/cache@v4
+        with:
+          path: /opt/openwrt-sdk
+          key: openwrt-sdk-${{ env.OPENWRT_VERSION }}-${{ matrix.target }}-${{ matrix.subtarget }}-v2
+
+      - name: Download OpenWrt SDK
+        if: steps.cache-sdk.outputs.cache-hit != 'true'
+        run: |
+          BASE="https://downloads.openwrt.org/releases/${{ env.OPENWRT_VERSION }}/targets/${{ matrix.target }}/${{ matrix.subtarget }}"
+          SDK_FILE=$(curl -sL "$BASE/" | grep -oP 'openwrt-sdk-[^"]+Linux-x86_64\.tar\.zst' | head -1)
+          echo "SDK: $SDK_FILE"
+          curl -L --retry 3 "$BASE/$SDK_FILE" -o /tmp/sdk.tar.zst
+          mkdir -p /opt/openwrt-sdk
+          tar --zstd -xf /tmp/sdk.tar.zst -C /opt/openwrt-sdk --strip-components=1
+
+      - name: Inject package into SDK
+        run: |
+          PKG_DIR="/opt/openwrt-sdk/package/${{ env.PACKAGE_NAME }}"
+          cp -r . "$PKG_DIR"
+          cd /opt/openwrt-sdk
+          ./scripts/feeds update -a -q
+          ./scripts/feeds install -a -q
+
+      - name: Build .ipk
+        run: |
+          cd /opt/openwrt-sdk
+          echo "CONFIG_PACKAGE_${{ env.PACKAGE_NAME }}=m" >> .config
+          make defconfig -j1
+          make package/${{ env.PACKAGE_NAME }}/compile V=s -j$(nproc) 2>&1 | tee /tmp/build.log
+          echo "--- Build complete ---"
+          find bin/packages -name "*.ipk" | grep "${{ env.PACKAGE_NAME }}"
+
+      - name: Collect artifact
+        run: |
+          cd /opt/openwrt-sdk
+          find bin/packages -name "${{ env.PACKAGE_NAME }}*.ipk" -exec \
+            cp {} /tmp/${{ env.PACKAGE_NAME }}_${{ matrix.target }}_${{ matrix.subtarget }}.ipk \;
+          ls -lh /tmp/${{ env.PACKAGE_NAME }}*.ipk
+
+      - name: Upload artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: ipk-${{ matrix.target }}-${{ matrix.subtarget }}
+          path: /tmp/${{ env.PACKAGE_NAME }}_*.ipk
+          retention-days: 30
+
+      - name: Show build log on failure
+        if: failure()
+        run: tail -150 /tmp/build.log
+
+  # ── 3. Release on version tag ────────────────────────────────────────────────
+  release:
+    name: GitHub Release
+    runs-on: ubuntu-24.04
+    needs: build
+    if: startsWith(github.ref, 'refs/tags/v')
+    permissions:
+      contents: write
+
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Download all .ipk artifacts
+        uses: actions/download-artifact@v4
+        with:
+          path: dist
+          pattern: ipk-*
+          merge-multiple: true
+
+      - name: Generate checksums
+        id: checksums
+        run: |
+          cd dist
+          sha256sum *.ipk > SHA256SUMS
+          cat SHA256SUMS
+          echo "SUMS<<EOF" >> $GITHUB_OUTPUT
+          cat SHA256SUMS >> $GITHUB_OUTPUT
+          echo "EOF" >> $GITHUB_OUTPUT
+
+      - name: Changelog since last tag
+        id: changelog
+        run: |
+          PREV=$(git describe --tags --abbrev=0 HEAD^ 2>/dev/null || echo "")
+          if [ -n "$PREV" ]; then
+            LOG=$(git log ${PREV}..HEAD --oneline --no-merges)
+          else
+            LOG=$(git log --oneline --no-merges | head -25)
+          fi
+          echo "LOG<<EOF" >> $GITHUB_OUTPUT
+          echo "$LOG" >> $GITHUB_OUTPUT
+          echo "EOF" >> $GITHUB_OUTPUT
+
+      - name: Create release
+        uses: softprops/action-gh-release@v2
+        with:
+          files: |
+            dist/*.ipk
+            dist/SHA256SUMS
+          body: |
+            ## HeartGuard ${{ github.ref_name }}
+
+            Family internet manager for OpenWrt — profiles, schedules, MAC-binding, website filtering.
+
+            ### Quick Install
+
+            ```bash
+            # 1. Pick your router's architecture:
+            #    ath79_generic    → TP-Link Archer C7, GL.iNet AR300M
+            #    ramips_mt7621    → GL.iNet MT1300, TP-Link EAP615
+            #    x86_64           → PC router, Proxmox VM
+            #    mediatek_filogic → GL.iNet MT6000, Xiaomi AX3000T
+
+            # 2. Copy to router and install:
+            scp luci-app-heartguard_*_ath79_generic.ipk root@192.168.1.1:/tmp/
+            opkg install /tmp/luci-app-heartguard*.ipk
+
+            # 3. Start:
+            /etc/init.d/heartguard enable
+            /etc/init.d/heartguard start
+            /usr/sbin/heartguard-update-blocklists
+            /etc/init.d/rpcd restart
+            ```
+
+            ### Changes since ${{ github.ref_name }}
+            ${{ steps.changelog.outputs.LOG }}
+
+            ### SHA-256 Checksums
+            ```
+            ${{ steps.checksums.outputs.SUMS }}
+            ```

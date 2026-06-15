@@ -1,0 +1,45 @@
+{
+	"admin/heartguard": {
+		"title": "HeartGuard",
+		"action": {
+			"type": "firstchild"
+		},
+		"icon": "shield",
+		"order": 70
+	},
+	"admin/heartguard/overview": {
+		"title": "Overview",
+		"action": {
+			"type": "view",
+			"path": "heartguard/overview"
+		}
+	},
+	"admin/heartguard/profiles": {
+		"title": "Profiles",
+		"action": {
+			"type": "view",
+			"path": "heartguard/profiles"
+		}
+	},
+	"admin/heartguard/devices": {
+		"title": "Devices",
+		"action": {
+			"type": "view",
+			"path": "heartguard/devices"
+		}
+	},
+	"admin/heartguard/schedule": {
+		"title": "Schedules",
+		"action": {
+			"type": "view",
+			"path": "heartguard/schedule"
+		}
+	},
+	"admin/heartguard/log": {
+		"title": "DNS Log",
+		"action": {
+			"type": "view",
+			"path": "heartguard/log"
+		}
+	}
+}
