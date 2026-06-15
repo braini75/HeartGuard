@@ -34,7 +34,7 @@ jobs:
           with open("root/etc/config/heartguard") as f:
             for i, line in enumerate(f, 1):
               l = line.rstrip()
-              if l and not l.startswith("#"):
+              if l and not l.lstrip().startswith("#"):
                 if not re.match(r"^\s*(config|option|list)\s+", l) and l.strip():
                   print(f"  Line {i}: unexpected: {l}")
                   ok = False
