@@ -3,8 +3,6 @@
 // /htdocs/luci-static/resources/view/heartguard/log.js
 
 'require view';
-'require poll';
-'require request';
 'require dom';
 'require ui';
 
@@ -52,29 +50,6 @@ return view.extend({
 
 		self.logEntries = [];
 		self.paused = false;
-
-		// Poll dnsmasq log via syslog
-		poll.add(function() {
-			if (self.paused) return;
-
-			return L.resolveDefault(
-				request.get('/cgi-bin/luci/admin/heartguard/log_data'),
-				null
-			).then(function(res) {
-				if (!res) {
-					// Fallback: parse from /tmp/heartguard.log via fetch
-					return;
-				}
-				try {
-					var entries = JSON.parse(res.text());
-					self.logEntries = self.logEntries.concat(entries).slice(-500);
-					var filter = filterInput.value || '';
-					self.renderLog(self.logEntries.filter(function(e) {
-						return !filter || JSON.stringify(e).toLowerCase().includes(filter.toLowerCase());
-					}));
-				} catch(e) {}
-			});
-		}, 3);
 
 		// Render initial demo entries
 		self.logEntries = self.getDemoEntries();

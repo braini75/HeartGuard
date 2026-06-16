@@ -10,7 +10,7 @@ PROG=/usr/sbin/heartguard
 CONFIG=/etc/config/heartguard
 DNSMASQ_CONF=/etc/dnsmasq.d/heartguard.conf
 NFT_CONF=/etc/nftables.d/heartguard.nft
-CRON_FILE=/etc/crontabs/heartguard
+CRON_FILE=/etc/crontabs/root
 
 . /lib/functions.sh
 
@@ -105,7 +105,7 @@ generate_profile_dns() {
 			echo "# Category block: $cat" >> "$DNSMASQ_CONF"
 			while IFS= read -r domain; do
 				[ -z "$domain" ] && continue
-				[[ "$domain" == \#* ]] && continue
+				case "$domain" in \#*) continue ;; esac
 				echo "address=/$domain/0.0.0.0,tag:$tag" >> "$DNSMASQ_CONF"
 			done < "$listfile"
 		fi
@@ -197,8 +197,7 @@ generate_cron() {
 
 	config_foreach generate_profile_cron profile
 
-	# Install crontab
-	crontab "$CRON_FILE"
+	killall -HUP crond 2>/dev/null
 	log "Cron schedules updated"
 }
 
@@ -241,7 +240,7 @@ start_service() {
 	config_get enabled global enabled 1
 	[ "$enabled" = "0" ] && { log "HeartGuard disabled, skipping"; return; }
 
-	log "Starting HeartGuard v$(config_get_bool global version 1.0.0)..."
+	log "Starting HeartGuard v$(config_get global version 1.0.0)..."
 
 	# Ensure blocklist dir exists
 	mkdir -p "$BLOCKLIST_DIR"
@@ -259,7 +258,8 @@ stop_service() {
 	rm -f "$NFT_CONF"
 	nft delete table inet heartguard 2>/dev/null
 	/etc/init.d/dnsmasq reload
-	crontab -r 2>/dev/null
+	> /etc/crontabs/root
+	killall -HUP crond 2>/dev/null
 	log "HeartGuard stopped"
 }
 

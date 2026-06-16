@@ -13,7 +13,22 @@ LUCI_PKGARCH:=all
 
 include $(TOPDIR)/feeds/luci/luci.mk
 
-# call BuildPackage - this is defined in include/package.mk
+define Package/luci-app-heartguard/install
+	$(INSTALL_DIR) $(1)/etc/init.d
+	$(INSTALL_BIN) ./root/etc/init.d/heartguard $(1)/etc/init.d/
+	$(INSTALL_DIR) $(1)/etc/config
+	$(INSTALL_CONF) ./root/etc/config/heartguard $(1)/etc/config/
+	$(INSTALL_DIR) $(1)/etc/heartguard/blocklists
+	$(INSTALL_DIR) $(1)/etc/crontabs
+	$(INSTALL_DIR) $(1)/usr/sbin
+	$(INSTALL_BIN) ./root/usr/sbin/heartguard-update-blocklists $(1)/usr/sbin/
+	$(INSTALL_BIN) ./root/usr/sbin/heartguard-schedule $(1)/usr/sbin/
+	$(INSTALL_DIR) $(1)/usr/share/luci/menu.d
+	$(INSTALL_DATA) ./root/usr/share/luci/menu.d/luci-app-heartguard.json $(1)/usr/share/luci/menu.d/
+	$(INSTALL_DIR) $(1)/usr/share/rpcd/acl.d
+	$(INSTALL_DATA) ./root/usr/share/rpcd/acl.d/luci-app-heartguard.json $(1)/usr/share/rpcd/acl.d/
+endef
+
 define Package/luci-app-heartguard/conffiles
 /etc/config/heartguard
 endef

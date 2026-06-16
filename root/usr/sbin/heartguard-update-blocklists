@@ -51,10 +51,9 @@ echo "$SOURCES" | while IFS='|' read -r category url; do
 	fi
 done
 
-# ─── BUILT-IN MINIMAL LISTS (fallback if no internet) ───────
-# Adult
+# ─── BUILT-IN MINIMAL LISTS (fallback if download failed) ───────
+if [ ! -s "$BLOCKLIST_DIR/adult.conf" ]; then
 cat > "$BLOCKLIST_DIR/adult.conf" <<-'ADULT'
-# HeartGuard built-in adult blocklist (minimal)
 pornhub.com
 xvideos.com
 xhamster.com
@@ -66,10 +65,10 @@ livejasmin.com
 stripchat.com
 cam4.com
 ADULT
+fi
 
-# Gambling
+if [ ! -s "$BLOCKLIST_DIR/gambling.conf" ]; then
 cat > "$BLOCKLIST_DIR/gambling.conf" <<-'GAMBL'
-# HeartGuard built-in gambling blocklist (minimal)
 bet365.com
 pokerstars.com
 888casino.com
@@ -79,10 +78,10 @@ ladbrokes.com
 paddy-power.com
 unibet.com
 GAMBL
+fi
 
-# Social Media
+if [ ! -s "$BLOCKLIST_DIR/social_media.conf" ]; then
 cat > "$BLOCKLIST_DIR/social_media.conf" <<-'SOCIAL'
-# HeartGuard built-in social media blocklist
 tiktok.com
 tiktokv.com
 musical.ly
@@ -92,10 +91,10 @@ reddit.com
 redd.it
 9gag.com
 SOCIAL
+fi
 
-# Gaming
+if [ ! -s "$BLOCKLIST_DIR/gaming.conf" ]; then
 cat > "$BLOCKLIST_DIR/gaming.conf" <<-'GAMING'
-# HeartGuard built-in gaming blocklist
 fortnite.com
 epicgames.com
 roblox.com
@@ -106,6 +105,7 @@ twitch.tv
 xbox.com
 playstation.com
 GAMING
+fi
 
 log "Blocklists updated. Reloading HeartGuard..."
 /etc/init.d/heartguard reload

@@ -81,15 +81,21 @@ return view.extend({
 		o.placeholder = 'AA:BB:CC:DD:EE:FF';
 		o.width = '20%';
 
-		// Auto-fill from ARP
+		// Auto-fill from ARP via datalist
 		o.renderWidget = function(section_id, option_index, cfgvalue) {
 			var widget = form.Value.prototype.renderWidget.apply(this, arguments);
-			// Add ARP entries as autocomplete suggestions
-			Object.keys(arp_hosts).forEach(function(mac) {
-				var host = arp_hosts[mac];
-				var opt = E('option', { value: mac },
-					mac + (host.name ? ' (' + host.name + ')' : ''));
-			});
+			var input = widget.querySelector('input');
+			if (input && Object.keys(arp_hosts).length > 0) {
+				var listId = 'hg-mac-suggestions-' + section_id;
+				var datalist = E('datalist', { id: listId });
+				Object.keys(arp_hosts).forEach(function(mac) {
+					var host = arp_hosts[mac];
+					datalist.appendChild(E('option', { value: mac },
+						mac + (host.name ? ' (' + host.name + ')' : '')));
+				});
+				input.setAttribute('list', listId);
+				widget.appendChild(datalist);
+			}
 			return widget;
 		};
 
