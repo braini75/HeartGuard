@@ -93,6 +93,12 @@ jobs:
           path: /opt/openwrt-sdk
           key: openwrt-sdk-${{ env.OPENWRT_VERSION }}-${{ matrix.target }}-${{ matrix.subtarget }}-v2
 
+      - name: Fix SDK permissions
+        run: |
+          if [ -d /opt/openwrt-sdk ]; then
+            chmod -R u+w /opt/openwrt-sdk
+          fi
+
       - name: Download OpenWrt SDK
         if: steps.cache-sdk.outputs.cache-hit != 'true'
         run: |
