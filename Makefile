@@ -14,6 +14,8 @@ LUCI_PKGARCH:=all
 include $(TOPDIR)/feeds/luci/luci.mk
 
 define Package/luci-app-heartguard/install
+	$(INSTALL_DIR) $(1)/www
+	$(CP) ./htdocs/* $(1)/www/
 	$(INSTALL_DIR) $(1)/etc/init.d
 	$(INSTALL_BIN) ./root/etc/init.d/heartguard $(1)/etc/init.d/
 	$(INSTALL_DIR) $(1)/etc/config
