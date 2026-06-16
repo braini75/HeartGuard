@@ -1,37 +1,36 @@
 #!/bin/sh /etc/rc.common
 # HeartGuard Service
-# /etc/init.d/heartguard
 
 START=95
 STOP=05
 USE_PROCD=1
 
-PROG=/usr/sbin/heartguard
 CONFIG=/etc/config/heartguard
 DNSMASQ_CONF=/etc/dnsmasq.d/heartguard.conf
+SITES_CONF=/etc/dnsmasq.d/heartguard_sites.conf
 NFT_CONF=/etc/nftables.d/heartguard.nft
 CRON_FILE=/etc/crontabs/root
+BLOCKLIST_DIR=/etc/heartguard/blocklists
+
+# Known DoH server IPs
+DOH_IPS="1.1.1.1, 1.0.0.1, 8.8.8.8, 8.8.4.4, 9.9.9.9, 9.9.9.10, 94.140.14.14, 94.140.15.15"
+
+# Safe search redirect IPs (forcesafesearch.google.com / strict.bing.com / restrict.youtube.com)
+GOOGLE_SAFE_IP="216.239.38.120"
+BING_SAFE_IP="204.79.197.220"
 
 . /lib/functions.sh
 
-# ─── CATEGORY DOMAIN LISTS ──────────────────────────────────
-# These point to local blocklist files (populated by update script)
-BLOCKLIST_DIR=/etc/heartguard/blocklists
-
-# ─── HELPER ─────────────────────────────────────────────────
 log() { logger -t heartguard "$@"; }
 
-get_mac_tag() {
-	local mac="$1"
-	# Normalize MAC to lowercase
-	echo "$mac" | tr '[:upper:]' '[:lower:]'
-}
+get_mac_tag() { echo "$1" | tr '[:upper:]' '[:lower:]'; }
 
-# ─── DNSMASQ CONFIG GENERATION ──────────────────────────────
+# ─── DNSMASQ ─────────────────────────────────────────────────
+
 generate_dnsmasq() {
 	local enabled
 	config_get enabled global enabled 1
-	[ "$enabled" = "0" ] && { rm -f "$DNSMASQ_CONF"; return; }
+	[ "$enabled" = "0" ] && { rm -f "$DNSMASQ_CONF" "$SITES_CONF"; return; }
 
 	log "Generating dnsmasq config..."
 	cat > "$DNSMASQ_CONF" <<-EOF
@@ -40,23 +39,23 @@ generate_dnsmasq() {
 
 	EOF
 
-	# Block ALL DNS for unknown devices (redirect to blockpage)
+	local log_queries
+	config_get log_queries global log_queries 1
+	[ "$log_queries" = "1" ] && echo "log-queries" >> "$DNSMASQ_CONF"
+
 	local block_unknown
 	config_get block_unknown global block_unknown_devices 1
 	if [ "$block_unknown" = "1" ]; then
-		echo "# Unknown devices → block page" >> "$DNSMASQ_CONF"
 		echo "tag-if=set:hg_blocked,tag:!hg_known" >> "$DNSMASQ_CONF"
 		echo "address=/#/0.0.0.0,tag:hg_blocked" >> "$DNSMASQ_CONF"
 		echo "" >> "$DNSMASQ_CONF"
 	fi
 
-	# Process each device → assign profile tag
 	config_foreach generate_device_dns device
-
-	# Process each profile → add domain rules
 	config_foreach generate_profile_dns profile
 
-	# Reload dnsmasq
+	generate_site_schedules
+
 	/etc/init.d/dnsmasq reload
 	log "dnsmasq config updated"
 }
@@ -64,18 +63,18 @@ generate_dnsmasq() {
 generate_device_dns() {
 	local cfg="$1"
 	local mac name profile enabled
-	config_get mac "$cfg" mac
-	config_get name "$cfg" name
+	config_get mac     "$cfg" mac
+	config_get name    "$cfg" name
 	config_get profile "$cfg" profile
 	config_get enabled "$cfg" enabled 1
 
 	[ -z "$mac" ] && return
 	[ "$enabled" = "0" ] && return
 
-	local tag="hg_$(echo "$profile" | tr -d '-')"
+	local tag="hg_$profile"
 	local mac_lower=$(get_mac_tag "$mac")
 
-	echo "# Device: $name ($mac) → profile: $profile" >> "$DNSMASQ_CONF"
+	echo "# Device: $name ($mac_lower) -> $profile" >> "$DNSMASQ_CONF"
 	echo "dhcp-mac=$tag,$mac_lower" >> "$DNSMASQ_CONF"
 	echo "tag-if=set:hg_known,tag:$tag" >> "$DNSMASQ_CONF"
 	echo "" >> "$DNSMASQ_CONF"
@@ -84,99 +83,191 @@ generate_device_dns() {
 generate_profile_dns() {
 	local cfg="$1"
 	local name enabled blocked_categories
-	config_get name "$cfg" name
+	config_get name    "$cfg" name
 	config_get enabled "$cfg" enabled 1
 	[ "$enabled" = "0" ] && return
 
 	local tag="hg_$cfg"
 	echo "# Profile: $name" >> "$DNSMASQ_CONF"
 
-	# Allowed domains (whitelist - override blocks)
-	config_list_foreach "$cfg" allowed_domains generate_allowed_domain "$tag"
+	# 1. Safe search (written first so explicit allows below can override)
+	generate_safesearch "$cfg" "$tag"
 
-	# Explicitly blocked domains
-	config_list_foreach "$cfg" blocked_domains generate_blocked_domain "$tag"
-
-	# Category blocklists
+	# 2. Category blocklists
 	config_get blocked_categories "$cfg" blocked_categories ""
 	for cat in $(echo "$blocked_categories" | tr ',' ' '); do
 		local listfile="$BLOCKLIST_DIR/$cat.conf"
-		if [ -f "$listfile" ]; then
-			echo "# Category block: $cat" >> "$DNSMASQ_CONF"
-			while IFS= read -r domain; do
-				[ -z "$domain" ] && continue
-				case "$domain" in \#*) continue ;; esac
-				echo "address=/$domain/0.0.0.0,tag:$tag" >> "$DNSMASQ_CONF"
-			done < "$listfile"
-		fi
+		[ -f "$listfile" ] || continue
+		echo "# Category: $cat" >> "$DNSMASQ_CONF"
+		while IFS= read -r domain; do
+			[ -z "$domain" ] && continue
+			case "$domain" in \#*) continue ;; esac
+			echo "address=/$domain/0.0.0.0,tag:$tag" >> "$DNSMASQ_CONF"
+		done < "$listfile"
 	done
+
+	# 3. Explicitly blocked domains
+	config_list_foreach "$cfg" blocked_domains generate_blocked_domain "$tag"
+
+	# 4. Always-allowed domains (last = highest priority, overrides everything above)
+	config_list_foreach "$cfg" allowed_domains generate_allowed_domain "$tag"
+
 	echo "" >> "$DNSMASQ_CONF"
 }
 
-generate_allowed_domain() {
-	local domain="$1" tag="$2"
-	# Whitelist: use real DNS (empty = pass-through)
-	echo "address=/$domain/,tag:$tag" >> "$DNSMASQ_CONF"
+generate_safesearch() {
+	local cfg="$1" tag="$2"
+	local safesearch
+	config_get safesearch "$cfg" safesearch 0
+	[ "$safesearch" != "1" ] && return
+
+	echo "# SafeSearch for $cfg" >> "$DNSMASQ_CONF"
+	for gd in google.com google.de google.at google.ch google.co.uk www.google.com www.google.de; do
+		echo "address=/$gd/$GOOGLE_SAFE_IP,tag:$tag" >> "$DNSMASQ_CONF"
+	done
+	echo "address=/bing.com/$BING_SAFE_IP,tag:$tag" >> "$DNSMASQ_CONF"
+	echo "address=/www.bing.com/$BING_SAFE_IP,tag:$tag" >> "$DNSMASQ_CONF"
+	for yd in youtube.com www.youtube.com m.youtube.com; do
+		echo "address=/$yd/$GOOGLE_SAFE_IP,tag:$tag" >> "$DNSMASQ_CONF"
+	done
 }
 
-generate_blocked_domain() {
-	local domain="$1" tag="$2"
-	echo "address=/$domain/0.0.0.0,tag:$tag" >> "$DNSMASQ_CONF"
+generate_allowed_domain() { echo "address=/$1/,tag:$2" >> "$DNSMASQ_CONF"; }
+generate_blocked_domain()  { echo "address=/$1/0.0.0.0,tag:$2" >> "$DNSMASQ_CONF"; }
+
+# ─── PER-SITE SCHEDULES ──────────────────────────────────────
+
+generate_site_schedules() {
+	echo "# HeartGuard per-site schedules - auto-generated" > "$SITES_CONF"
+
+	local dow now_mins
+	dow=$(date +%w)   # 0=Sun, 1=Mon...6=Sat
+	now_mins=$(( $(date +%H) * 60 + $(date +%M) ))
+
+	config_foreach check_site_schedule site_schedule "$dow" "$now_mins"
 }
 
-# ─── NFTABLES CONFIG GENERATION ─────────────────────────────
+check_site_schedule() {
+	local cfg="$1" dow="$2" now_mins="$3"
+	local profile domain enabled
+	config_get profile "$cfg" profile
+	config_get domain  "$cfg" domain
+	config_get enabled "$cfg" enabled 1
+	[ "$enabled" = "1" ] && [ -n "$domain" ] && [ -n "$profile" ] || return
+
+	local start end
+	if [ "$dow" = "0" ] || [ "$dow" = "6" ]; then
+		config_get start "$cfg" weekend_start ""
+		config_get end   "$cfg" weekend_end   ""
+	else
+		config_get start "$cfg" weekday_start ""
+		config_get end   "$cfg" weekday_end   ""
+	fi
+
+	# No schedule for this day type → site is unrestricted today
+	[ -z "$start" ] || [ -z "$end" ] && return
+
+	local s_h=$(echo "$start" | cut -d: -f1)
+	local s_m=$(echo "$start" | cut -d: -f2)
+	local e_h=$(echo "$end"   | cut -d: -f1)
+	local e_m=$(echo "$end"   | cut -d: -f2)
+	local s_mins=$(( s_h * 60 + s_m ))
+	local e_mins=$(( e_h * 60 + e_m ))
+
+	# Outside allowed window → block now
+	if [ "$now_mins" -lt "$s_mins" ] || [ "$now_mins" -ge "$e_mins" ]; then
+		echo "address=/$domain/0.0.0.0,tag:hg_$profile" >> "$SITES_CONF"
+	fi
+}
+
+# ─── NFTABLES ────────────────────────────────────────────────
+
 generate_nftables() {
 	log "Generating nftables rules..."
-	cat > "$NFT_CONF" <<-'NFTEOF'
-	# HeartGuard nftables rules - auto-generated
-	# Loaded by fw4 on boot and rule changes
 
-	table inet heartguard {
-	    # MAC sets per profile (populated dynamically)
-	    set profile_lukas {
-	        type ether_addr
-	        elements = { }
-	    }
-	    set profile_emma {
-	        type ether_addr
-	        elements = { }
-	    }
-	    set blocked_devices {
-	        type ether_addr
-	        elements = { }
-	    }
+	> "$NFT_CONF"
+	echo "# HeartGuard nftables - auto-generated" >> "$NFT_CONF"
+	echo "# Generated: $(date)" >> "$NFT_CONF"
+	echo "" >> "$NFT_CONF"
+	echo "table inet heartguard {" >> "$NFT_CONF"
 
-	    # Block external DNS for all managed devices (prevent bypass)
-	    chain forward_dns_guard {
-	        type filter hook forward priority 0; policy accept;
+	# Dynamic set per profile
+	config_foreach generate_profile_nft_set profile
 
-	        # Block port 53 UDP/TCP to external servers for managed MACs
-	        ether saddr @profile_lukas udp dport 53 ip daddr != 192.168.1.1 drop
-	        ether saddr @profile_lukas tcp dport 53 ip daddr != 192.168.1.1 drop
-	        ether saddr @profile_emma  udp dport 53 ip daddr != 192.168.1.1 drop
-	        ether saddr @profile_emma  tcp dport 53 ip daddr != 192.168.1.1 drop
+	# Blocked devices set
+	echo "    set blocked_devices {" >> "$NFT_CONF"
+	echo "        type ether_addr" >> "$NFT_CONF"
+	echo "        elements = { }" >> "$NFT_CONF"
+	echo "    }" >> "$NFT_CONF"
+	echo "" >> "$NFT_CONF"
 
-	        # Block known DoH servers (DNS-over-HTTPS bypass prevention)
-	        ether saddr @profile_lukas ip daddr { 8.8.8.8, 8.8.4.4, 1.1.1.1, 1.0.0.1, 9.9.9.9 } drop
-	        ether saddr @profile_emma  ip daddr { 8.8.8.8, 8.8.4.4, 1.1.1.1, 1.0.0.1, 9.9.9.9 } drop
+	# DoH servers set
+	echo "    set doh_servers {" >> "$NFT_CONF"
+	echo "        type ipv4_addr" >> "$NFT_CONF"
+	echo "        elements = { $DOH_IPS }" >> "$NFT_CONF"
+	echo "    }" >> "$NFT_CONF"
+	echo "" >> "$NFT_CONF"
 
-	        # Blocked devices: drop all traffic
-	        ether saddr @blocked_devices drop
-	    }
-	}
-	NFTEOF
+	# Forward chain
+	echo "    chain forward_guard {" >> "$NFT_CONF"
+	echo "        type filter hook forward priority 0; policy accept;" >> "$NFT_CONF"
+	echo "" >> "$NFT_CONF"
+
+	# Per-profile rules (DoT, DoH, VPN, external DNS)
+	config_foreach generate_profile_nft_rules profile
+
+	# Block all traffic from blocked devices
+	echo "        ether saddr @blocked_devices drop" >> "$NFT_CONF"
+	echo "    }" >> "$NFT_CONF"
+	echo "}" >> "$NFT_CONF"
+
+	nft -f "$NFT_CONF" 2>/dev/null || log "nftables: load failed, check $NFT_CONF"
 
 	# Populate MAC sets from config
 	config_foreach add_mac_to_nft device
 
-	nft -f "$NFT_CONF" 2>/dev/null || log "nftables: config applied (some rules may need flush)"
 	log "nftables rules updated"
+}
+
+generate_profile_nft_set() {
+	local cfg="$1"
+	echo "    set profile_$cfg {" >> "$NFT_CONF"
+	echo "        type ether_addr" >> "$NFT_CONF"
+	echo "        elements = { }" >> "$NFT_CONF"
+	echo "    }" >> "$NFT_CONF"
+	echo "" >> "$NFT_CONF"
+}
+
+generate_profile_nft_rules() {
+	local cfg="$1"
+	local enabled
+	config_get enabled "$cfg" enabled 1
+	[ "$enabled" = "0" ] && return
+
+	local s="@profile_$cfg"
+
+	echo "        # Profile: $cfg" >> "$NFT_CONF"
+	# Block external DNS (prevent manual override)
+	echo "        ether saddr $s udp dport 53 ip daddr != 192.168.1.1 drop" >> "$NFT_CONF"
+	echo "        ether saddr $s tcp dport 53 ip daddr != 192.168.1.1 drop" >> "$NFT_CONF"
+	# Block DNS-over-TLS
+	echo "        ether saddr $s tcp dport 853 drop" >> "$NFT_CONF"
+	# Block DNS-over-HTTPS (to known DoH servers)
+	echo "        ether saddr $s ip daddr @doh_servers tcp dport 443 drop" >> "$NFT_CONF"
+	# Block VPN protocols
+	echo "        ether saddr $s udp dport 51820 drop" >> "$NFT_CONF"  # WireGuard
+	echo "        ether saddr $s udp dport 1194 drop"  >> "$NFT_CONF"  # OpenVPN UDP
+	echo "        ether saddr $s tcp dport 1194 drop"  >> "$NFT_CONF"  # OpenVPN TCP
+	echo "        ether saddr $s tcp dport 1723 drop"  >> "$NFT_CONF"  # PPTP
+	echo "        ether saddr $s udp dport 500 drop"   >> "$NFT_CONF"  # IKEv2
+	echo "        ether saddr $s udp dport 4500 drop"  >> "$NFT_CONF"  # IKEv2 NAT-T
+	echo "" >> "$NFT_CONF"
 }
 
 add_mac_to_nft() {
 	local cfg="$1"
 	local mac profile enabled
-	config_get mac "$cfg" mac
+	config_get mac     "$cfg" mac
 	config_get profile "$cfg" profile
 	config_get enabled "$cfg" enabled 1
 	[ -z "$mac" ] && return
@@ -190,12 +281,14 @@ add_mac_to_nft() {
 	fi
 }
 
-# ─── SCHEDULE / CRON ────────────────────────────────────────
+# ─── CRON ────────────────────────────────────────────────────
+
 generate_cron() {
 	log "Generating cron schedules..."
 	> "$CRON_FILE"
 
 	config_foreach generate_profile_cron profile
+	config_foreach generate_site_cron site_schedule
 
 	killall -HUP crond 2>/dev/null
 	log "Cron schedules updated"
@@ -203,8 +296,8 @@ generate_cron() {
 
 generate_profile_cron() {
 	local cfg="$1"
-	local name enabled weekday_start weekday_end weekend_start weekend_end
-	config_get name "$cfg" name
+	local name enabled
+	config_get name    "$cfg" name
 	config_get enabled "$cfg" enabled 1
 	[ "$enabled" = "0" ] && return
 
@@ -223,39 +316,72 @@ generate_profile_cron() {
 	local se_m=$(echo "$weekend_end"   | cut -d: -f2)
 
 	echo "# Profile: $name" >> "$CRON_FILE"
-	# Weekdays (Mon-Fri): allow at start, block at end
 	echo "$ws_m $ws_h * * 1-5 /usr/sbin/heartguard-schedule allow $cfg" >> "$CRON_FILE"
 	echo "$we_m $we_h * * 1-5 /usr/sbin/heartguard-schedule block $cfg" >> "$CRON_FILE"
-	# Weekend (Sat-Sun)
-	echo "$ss_m $ss_h * * 6,0 /usr/sbin/heartguard-schedule allow $cfg" >> "$CRON_FILE"
-	echo "$se_m $se_h * * 6,0 /usr/sbin/heartguard-schedule block $cfg" >> "$CRON_FILE"
+	echo "$ss_m $ss_h * * 0,6 /usr/sbin/heartguard-schedule allow $cfg" >> "$CRON_FILE"
+	echo "$se_m $se_h * * 0,6 /usr/sbin/heartguard-schedule block $cfg" >> "$CRON_FILE"
 	echo "" >> "$CRON_FILE"
 }
 
-# ─── PROCD / SERVICE ────────────────────────────────────────
+generate_site_cron() {
+	local cfg="$1"
+	local profile domain enabled
+	config_get profile "$cfg" profile
+	config_get domain  "$cfg" domain
+	config_get enabled "$cfg" enabled 1
+	[ "$enabled" = "0" ] || [ -z "$domain" ] || [ -z "$profile" ] && return
+
+	config_get weekday_start "$cfg" weekday_start ""
+	config_get weekday_end   "$cfg" weekday_end   ""
+	config_get weekend_start "$cfg" weekend_start ""
+	config_get weekend_end   "$cfg" weekend_end   ""
+
+	echo "# Site: $domain ($profile)" >> "$CRON_FILE"
+
+	if [ -n "$weekday_start" ] && [ -n "$weekday_end" ]; then
+		local ws_h=$(echo "$weekday_start" | cut -d: -f1)
+		local ws_m=$(echo "$weekday_start" | cut -d: -f2)
+		local we_h=$(echo "$weekday_end"   | cut -d: -f1)
+		local we_m=$(echo "$weekday_end"   | cut -d: -f2)
+		echo "$ws_m $ws_h * * 1-5 /usr/sbin/heartguard-schedule site_allow $profile $domain" >> "$CRON_FILE"
+		echo "$we_m $we_h * * 1-5 /usr/sbin/heartguard-schedule site_block $profile $domain" >> "$CRON_FILE"
+	fi
+
+	if [ -n "$weekend_start" ] && [ -n "$weekend_end" ]; then
+		local ss_h=$(echo "$weekend_start" | cut -d: -f1)
+		local ss_m=$(echo "$weekend_start" | cut -d: -f2)
+		local se_h=$(echo "$weekend_end"   | cut -d: -f1)
+		local se_m=$(echo "$weekend_end"   | cut -d: -f2)
+		echo "$ss_m $ss_h * * 0,6 /usr/sbin/heartguard-schedule site_allow $profile $domain" >> "$CRON_FILE"
+		echo "$se_m $se_h * * 0,6 /usr/sbin/heartguard-schedule site_block $profile $domain" >> "$CRON_FILE"
+	fi
+
+	echo "" >> "$CRON_FILE"
+}
+
+# ─── PROCD / SERVICE ─────────────────────────────────────────
+
 start_service() {
 	config_load heartguard
 
 	local enabled
 	config_get enabled global enabled 1
-	[ "$enabled" = "0" ] && { log "HeartGuard disabled, skipping"; return; }
+	[ "$enabled" = "0" ] && { log "HeartGuard disabled"; return; }
 
 	log "Starting HeartGuard v$(config_get global version 1.0.0)..."
 
-	# Ensure blocklist dir exists
-	mkdir -p "$BLOCKLIST_DIR"
+	mkdir -p "$BLOCKLIST_DIR" /etc/dnsmasq.d /etc/nftables.d /etc/crontabs
 
 	generate_dnsmasq
 	generate_nftables
 	generate_cron
 
-	log "HeartGuard started successfully"
+	log "HeartGuard started"
 }
 
 stop_service() {
 	log "Stopping HeartGuard..."
-	rm -f "$DNSMASQ_CONF"
-	rm -f "$NFT_CONF"
+	rm -f "$DNSMASQ_CONF" "$SITES_CONF" "$NFT_CONF"
 	nft delete table inet heartguard 2>/dev/null
 	/etc/init.d/dnsmasq reload
 	> /etc/crontabs/root
@@ -264,9 +390,10 @@ stop_service() {
 }
 
 reload_service() {
-	log "Reloading HeartGuard..."
-	stop_service
-	start_service
+	config_load heartguard
+	generate_dnsmasq
+	generate_nftables
+	generate_cron
 }
 
 service_triggers() {

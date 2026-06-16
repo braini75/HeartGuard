@@ -1,0 +1,74 @@
+#!/bin/sh
+# HeartGuard rpcd backend
+# Provides ubus object 'heartguard' with methods: log, status
+
+. /usr/share/libubox/jshn.sh
+. /lib/functions.sh
+
+case "$1" in
+	list)
+		echo '{"log":{"lines":0},"status":{}}'
+		;;
+	call)
+		case "$2" in
+			log)
+				read -r input
+				lines=$(echo "$input" | jsonfilter -e '@.lines' 2>/dev/null)
+				lines=${lines:-200}
+				[ "$lines" -gt 500 ] 2>/dev/null && lines=500
+
+				tmp=$(mktemp /tmp/hg_log.XXXXXX)
+				logread 2>/dev/null | grep 'dnsmasq\[' | \
+					grep -E '(is 0\.0\.0\.0| forwarded )' | \
+					tail -n "$lines" > "$tmp"
+
+				json_init
+				json_add_array "entries"
+
+				while IFS= read -r line; do
+					time=$(echo "$line" | awk '{print $3}')
+					msg=$(echo "$line" | sed 's/.*dnsmasq\[[0-9]*\]: //')
+
+					case "$msg" in
+						*" is 0.0.0.0")
+							domain=$(echo "$msg" | awk '{print $(NF-2)}')
+							action="BLOCKED"
+							;;
+						"forwarded "*)
+							domain=$(echo "$msg" | awk '{print $2}')
+							action="ALLOWED"
+							;;
+						*)
+							continue
+							;;
+					esac
+
+					[ -z "$domain" ] && continue
+					# Sanitize: DNS names are safe but strip any stray chars
+					domain=$(echo "$domain" | tr -cd 'a-zA-Z0-9.-')
+					[ -z "$domain" ] && continue
+
+					json_add_object ""
+					json_add_string "time"   "$time"
+					json_add_string "domain" "$domain"
+					json_add_string "action" "$action"
+					json_close_object
+				done < "$tmp"
+
+				rm -f "$tmp"
+				json_close_array
+				json_dump
+				;;
+
+			status)
+				config_load heartguard
+				local enabled
+				config_get enabled global enabled 1
+
+				json_init
+				json_add_boolean "enabled" "$([ "$enabled" = "1" ] && echo 1 || echo 0)"
+				json_dump
+				;;
+		esac
+		;;
+esac

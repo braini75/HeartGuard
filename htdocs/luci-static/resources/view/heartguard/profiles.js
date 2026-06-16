@@ -84,6 +84,12 @@ return view.extend({
 		s.anonymous = false;
 		s.addremove = false;
 
+		// Safe search
+		o = s.option(form.Flag, 'safesearch', _('SafeSearch & YouTube Restricted'),
+			_('Leitet Google, Bing und YouTube auf Safe-Search-Server um — verhindert explizite Inhalte in Suchergebnissen'));
+		o.default = '0';
+		o.rmempty = true;
+
 		// Blocked categories
 		o = s.option(form.MultiValue, 'blocked_categories', _('Blockierte Kategorien'));
 		o.value('adult',        _('🔞 Adult / Pornographie'));

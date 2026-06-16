@@ -4,20 +4,19 @@
 		"read": {
 			"uci": ["heartguard"],
 			"ubus": {
-				"heartguard": ["status", "get_devices", "get_profiles", "get_log"],
+				"heartguard": ["status", "log"],
 				"network.interface": ["status"],
-				"network": ["get_proto_handlers"]
+				"luci": ["getHostHints"]
 			},
 			"file": {
 				"/etc/heartguard/*": ["read"],
-				"/var/log/heartguard.log": ["read"],
 				"/proc/net/arp": ["read"]
 			}
 		},
 		"write": {
 			"uci": ["heartguard"],
 			"ubus": {
-				"heartguard": ["apply", "reload", "block_device", "unblock_device"]
+				"heartguard": ["reload"]
 			},
 			"file": {
 				"/etc/heartguard/*": ["write"]

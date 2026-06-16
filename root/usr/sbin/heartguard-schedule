@@ -3,13 +3,16 @@
 # Called by cron: heartguard-schedule [allow|block] [profile_id]
 # /usr/sbin/heartguard-schedule
 
-ACTION="$1"   # allow | block
+ACTION="$1"   # allow | block | site_allow | site_block
 PROFILE="$2"  # e.g. lukas, emma
+DOMAIN="$3"   # e.g. youtube.com (site_* actions only)
 
 [ -z "$ACTION" ] || [ -z "$PROFILE" ] && {
-	echo "Usage: heartguard-schedule [allow|block] [profile_id]"
+	echo "Usage: heartguard-schedule [allow|block|site_allow|site_block] [profile_id] [domain?]"
 	exit 1
 }
+
+SITES_CONF=/etc/dnsmasq.d/heartguard_sites.conf
 
 log() { logger -t heartguard-schedule "$@"; }
 
@@ -67,5 +70,23 @@ elif [ "$ACTION" = "allow" ]; then
 	done
 fi
 
-# Send notification to LuCI websocket (if available)
+elif [ "$ACTION" = "site_block" ]; then
+	[ -z "$DOMAIN" ] && { log "site_block requires a domain argument"; exit 1; }
+	log "Blocking site '$DOMAIN' for profile '$PROFILE'"
+	[ -f "$SITES_CONF" ] || echo "# HeartGuard per-site schedules" > "$SITES_CONF"
+	local entry="address=/$DOMAIN/0.0.0.0,tag:hg_$PROFILE"
+	grep -qF "$entry" "$SITES_CONF" 2>/dev/null || echo "$entry" >> "$SITES_CONF"
+	/etc/init.d/dnsmasq reload
+
+elif [ "$ACTION" = "site_allow" ]; then
+	[ -z "$DOMAIN" ] && { log "site_allow requires a domain argument"; exit 1; }
+	log "Allowing site '$DOMAIN' for profile '$PROFILE'"
+	if [ -f "$SITES_CONF" ]; then
+		escaped=$(echo "$DOMAIN" | sed 's/\./\\./g')
+		sed -i "/address=\/$escaped\/0\.0\.0\.0,tag:hg_$PROFILE/d" "$SITES_CONF"
+	fi
+	/etc/init.d/dnsmasq reload
+fi
+
+# Notify LuCI (if available)
 ubus send heartguard.schedule_change "{\"profile\":\"$PROFILE\",\"action\":\"$ACTION\"}" 2>/dev/null
