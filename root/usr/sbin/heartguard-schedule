@@ -52,7 +52,7 @@ if [ "$ACTION" = "block" ]; then
 		mac_lower=$(echo "$mac" | tr '[:upper:]' '[:lower:]')
 		echo "dhcp-mac=hg_sched_block,$mac_lower" >> "$DNSMASQ_SCHED"
 	done
-	echo "address=/#/0.0.0.0,tag:hg_sched_block" >> "$DNSMASQ_SCHED"
+	echo "address=tag:hg_sched_block,/#/0.0.0.0" >> "$DNSMASQ_SCHED"
 	/etc/init.d/dnsmasq reload
 
 elif [ "$ACTION" = "allow" ]; then
@@ -68,13 +68,12 @@ elif [ "$ACTION" = "allow" ]; then
 		nft add element inet heartguard "profile_$PROFILE" "{ $mac_lower }" 2>/dev/null
 		log "  Allowed: $mac"
 	done
-fi
 
 elif [ "$ACTION" = "site_block" ]; then
 	[ -z "$DOMAIN" ] && { log "site_block requires a domain argument"; exit 1; }
 	log "Blocking site '$DOMAIN' for profile '$PROFILE'"
 	[ -f "$SITES_CONF" ] || echo "# HeartGuard per-site schedules" > "$SITES_CONF"
-	local entry="address=tag:hg_$PROFILE,/$DOMAIN/0.0.0.0"
+	entry="address=tag:hg_$PROFILE,/$DOMAIN/0.0.0.0"
 	grep -qF "$entry" "$SITES_CONF" 2>/dev/null || echo "$entry" >> "$SITES_CONF"
 	/etc/init.d/dnsmasq reload
 

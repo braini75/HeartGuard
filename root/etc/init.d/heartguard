@@ -93,7 +93,9 @@ generate_profile_dns() {
 	# 1. Safe search (written first so explicit allows below can override)
 	generate_safesearch "$cfg" "$tag"
 
-	# 2. Category blocklists
+	# 2. Category blocklists (skipping explicitly allowed domains)
+	_HG_ALLOWED_LIST=""
+	config_list_foreach "$cfg" allowed_domains _collect_allowed_domain
 	config_get blocked_categories "$cfg" blocked_categories ""
 	for cat in $(echo "$blocked_categories" | tr ',' ' '); do
 		local listfile="$BLOCKLIST_DIR/$cat.conf"
@@ -102,15 +104,13 @@ generate_profile_dns() {
 		while IFS= read -r domain; do
 			[ -z "$domain" ] && continue
 			case "$domain" in \#*) continue ;; esac
+			_domain_in_allowed "$domain" && continue
 			echo "address=tag:$tag,/$domain/0.0.0.0" >> "$DNSMASQ_CONF"
 		done < "$listfile"
 	done
 
 	# 3. Explicitly blocked domains
 	config_list_foreach "$cfg" blocked_domains generate_blocked_domain "$tag"
-
-	# 4. Always-allowed domains (last = highest priority, overrides everything above)
-	config_list_foreach "$cfg" allowed_domains generate_allowed_domain "$tag"
 
 	echo "" >> "$DNSMASQ_CONF"
 }
@@ -132,8 +132,12 @@ generate_safesearch() {
 	done
 }
 
-generate_allowed_domain() { echo "address=tag:$2,/$1/##" >> "$DNSMASQ_CONF"; }
-generate_blocked_domain()  { echo "address=tag:$2,/$1/0.0.0.0" >> "$DNSMASQ_CONF"; }
+generate_blocked_domain() { echo "address=tag:$2,/$1/0.0.0.0" >> "$DNSMASQ_CONF"; }
+
+# Allowed-domain helpers (global state reset per profile in generate_profile_dns)
+_HG_ALLOWED_LIST=""
+_collect_allowed_domain() { _HG_ALLOWED_LIST="$_HG_ALLOWED_LIST $1 "; }
+_domain_in_allowed()      { case " $_HG_ALLOWED_LIST " in *" $1 "*) return 0;; esac; return 1; }
 
 # ─── PER-SITE SCHEDULES ──────────────────────────────────────
 

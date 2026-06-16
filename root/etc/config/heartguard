@@ -3,7 +3,7 @@
 
 config heartguard 'global'
 	option enabled '1'
-	option version '1.0.0'
+	option version '1.1.1'
 	option block_unknown_devices '1'
 	option log_queries '1'
 	option timezone 'Europe/Berlin'

@@ -5,7 +5,7 @@ LUCI_DESCRIPTION:=Parental control system with profiles, schedules, MAC-binding 
 LUCI_DEPENDS:=+dnsmasq +kmod-nft-core +nftables +luci-base +libubox +jsonfilter
 
 PKG_NAME:=luci-app-heartguard
-PKG_VERSION:=1.1.0
+PKG_VERSION:=1.1.1
 PKG_RELEASE:=1
 PKG_LICENSE:=GPL-2.0-only
 
