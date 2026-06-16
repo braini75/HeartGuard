@@ -117,6 +117,12 @@ jobs:
           ./scripts/feeds update -a -q
           ./scripts/feeds install -a -q
 
+      - name: Clean package stamps
+        run: |
+          cd /opt/openwrt-sdk
+          find build_dir -maxdepth 4 -name "${{ env.PACKAGE_NAME }}*" -exec rm -rf {} + 2>/dev/null || true
+          find staging_dir -name ".*${{ env.PACKAGE_NAME }}*" -delete 2>/dev/null || true
+
       - name: Build .ipk
         run: |
           cd /opt/openwrt-sdk
