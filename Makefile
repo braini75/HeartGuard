@@ -2,7 +2,7 @@ include $(TOPDIR)/rules.mk
 
 LUCI_TITLE:=HeartGuard Family Internet Manager
 LUCI_DESCRIPTION:=Parental control system with profiles, schedules, MAC-binding and website filtering
-LUCI_DEPENDS:=+dnsmasq-full +kmod-nft-core +nftables +cron +luci-base
+LUCI_DEPENDS:=+dnsmasq-full +kmod-nft-core +nftables +luci-base
 
 PKG_NAME:=luci-app-heartguard
 PKG_VERSION:=1.0.0
