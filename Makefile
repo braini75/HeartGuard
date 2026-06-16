@@ -33,6 +33,15 @@ define Package/luci-app-heartguard/install
 	$(INSTALL_BIN) ./root/usr/libexec/rpcd/heartguard $(1)/usr/libexec/rpcd/
 endef
 
+define Package/luci-app-heartguard/postinst
+#!/bin/sh
+[ -n "$${IPKG_INSTROOT}" ] && exit 0
+/etc/init.d/rpcd restart 2>/dev/null
+/etc/init.d/heartguard enable 2>/dev/null
+/etc/init.d/heartguard start 2>/dev/null
+exit 0
+endef
+
 define Package/luci-app-heartguard/conffiles
 /etc/config/heartguard
 endef

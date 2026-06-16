@@ -361,6 +361,16 @@ generate_site_cron() {
 
 # ─── PROCD / SERVICE ─────────────────────────────────────────
 
+ensure_dnsmasq_confdir() {
+	local confdir
+	confdir=$(uci -q get dhcp.@dnsmasq[0].confdir 2>/dev/null)
+	if [ "$confdir" != "/etc/dnsmasq.d" ]; then
+		uci -q set dhcp.@dnsmasq[0].confdir=/etc/dnsmasq.d
+		uci -q commit dhcp
+		log "Configured dnsmasq to include /etc/dnsmasq.d"
+	fi
+}
+
 start_service() {
 	config_load heartguard
 
@@ -372,6 +382,7 @@ start_service() {
 
 	mkdir -p "$BLOCKLIST_DIR" /etc/dnsmasq.d /etc/nftables.d /etc/crontabs
 
+	ensure_dnsmasq_confdir
 	generate_dnsmasq
 	generate_nftables
 	generate_cron
