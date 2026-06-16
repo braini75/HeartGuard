@@ -74,7 +74,7 @@ elif [ "$ACTION" = "site_block" ]; then
 	[ -z "$DOMAIN" ] && { log "site_block requires a domain argument"; exit 1; }
 	log "Blocking site '$DOMAIN' for profile '$PROFILE'"
 	[ -f "$SITES_CONF" ] || echo "# HeartGuard per-site schedules" > "$SITES_CONF"
-	local entry="address=/$DOMAIN/0.0.0.0,tag:hg_$PROFILE"
+	local entry="address=tag:hg_$PROFILE,/$DOMAIN/0.0.0.0"
 	grep -qF "$entry" "$SITES_CONF" 2>/dev/null || echo "$entry" >> "$SITES_CONF"
 	/etc/init.d/dnsmasq reload
 
@@ -83,7 +83,7 @@ elif [ "$ACTION" = "site_allow" ]; then
 	log "Allowing site '$DOMAIN' for profile '$PROFILE'"
 	if [ -f "$SITES_CONF" ]; then
 		escaped=$(echo "$DOMAIN" | sed 's/\./\\./g')
-		sed -i "/address=\/$escaped\/0\.0\.0\.0,tag:hg_$PROFILE/d" "$SITES_CONF"
+		sed -i "/address=tag:hg_$PROFILE,\/$escaped\/0\.0\.0\.0/d" "$SITES_CONF"
 	fi
 	/etc/init.d/dnsmasq reload
 fi

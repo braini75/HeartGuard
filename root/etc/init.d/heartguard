@@ -47,7 +47,7 @@ generate_dnsmasq() {
 	config_get block_unknown global block_unknown_devices 1
 	if [ "$block_unknown" = "1" ]; then
 		echo "tag-if=set:hg_blocked,tag:!hg_known" >> "$DNSMASQ_CONF"
-		echo "address=/#/0.0.0.0,tag:hg_blocked" >> "$DNSMASQ_CONF"
+		echo "address=tag:hg_blocked,/#/0.0.0.0" >> "$DNSMASQ_CONF"
 		echo "" >> "$DNSMASQ_CONF"
 	fi
 
@@ -102,7 +102,7 @@ generate_profile_dns() {
 		while IFS= read -r domain; do
 			[ -z "$domain" ] && continue
 			case "$domain" in \#*) continue ;; esac
-			echo "address=/$domain/0.0.0.0,tag:$tag" >> "$DNSMASQ_CONF"
+			echo "address=tag:$tag,/$domain/0.0.0.0" >> "$DNSMASQ_CONF"
 		done < "$listfile"
 	done
 
@@ -123,17 +123,17 @@ generate_safesearch() {
 
 	echo "# SafeSearch for $cfg" >> "$DNSMASQ_CONF"
 	for gd in google.com google.de google.at google.ch google.co.uk www.google.com www.google.de; do
-		echo "address=/$gd/$GOOGLE_SAFE_IP,tag:$tag" >> "$DNSMASQ_CONF"
+		echo "address=tag:$tag,/$gd/$GOOGLE_SAFE_IP" >> "$DNSMASQ_CONF"
 	done
-	echo "address=/bing.com/$BING_SAFE_IP,tag:$tag" >> "$DNSMASQ_CONF"
-	echo "address=/www.bing.com/$BING_SAFE_IP,tag:$tag" >> "$DNSMASQ_CONF"
+	echo "address=tag:$tag,/bing.com/$BING_SAFE_IP" >> "$DNSMASQ_CONF"
+	echo "address=tag:$tag,/www.bing.com/$BING_SAFE_IP" >> "$DNSMASQ_CONF"
 	for yd in youtube.com www.youtube.com m.youtube.com; do
-		echo "address=/$yd/$GOOGLE_SAFE_IP,tag:$tag" >> "$DNSMASQ_CONF"
+		echo "address=tag:$tag,/$yd/$GOOGLE_SAFE_IP" >> "$DNSMASQ_CONF"
 	done
 }
 
-generate_allowed_domain() { echo "address=/$1/,tag:$2" >> "$DNSMASQ_CONF"; }
-generate_blocked_domain()  { echo "address=/$1/0.0.0.0,tag:$2" >> "$DNSMASQ_CONF"; }
+generate_allowed_domain() { echo "address=tag:$2,/$1/##" >> "$DNSMASQ_CONF"; }
+generate_blocked_domain()  { echo "address=tag:$2,/$1/0.0.0.0" >> "$DNSMASQ_CONF"; }
 
 # ─── PER-SITE SCHEDULES ──────────────────────────────────────
 
@@ -176,7 +176,7 @@ check_site_schedule() {
 
 	# Outside allowed window → block now
 	if [ "$now_mins" -lt "$s_mins" ] || [ "$now_mins" -ge "$e_mins" ]; then
-		echo "address=/$domain/0.0.0.0,tag:hg_$profile" >> "$SITES_CONF"
+		echo "address=tag:hg_$profile,/$domain/0.0.0.0" >> "$SITES_CONF"
 	fi
 }
 
